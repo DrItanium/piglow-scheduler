@@ -8,9 +8,9 @@ import (
 	"os"
 )
 
-var channel0 = flag.String("chan0", "", "path to channel 0")
-var channel1 = flag.String("chan1", "", "path to channel 1")
-var channel2 = flag.String("chan2", "", "path to channel 2")
+var channel0 = flag.String("chan0", "", "path to channel 0 (required)")
+var channel1 = flag.String("chan1", "", "path to channel 1 (required)")
+var channel2 = flag.String("chan2", "", "path to channel 2 (required)")
 
 type µop [7]byte
 
@@ -59,7 +59,9 @@ func checkArgs() error {
 func main() {
 	flag.Parse()
 	if e := checkArgs(); e != nil {
-		panic(e)
+		fmt.Println(e)
+		flag.Usage()
+		return
 	}
 	// read in three µop chains at a time
 	var f0, f1, f2 *os.File
