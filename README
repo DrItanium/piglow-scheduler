@@ -1,0 +1,26 @@
+The piglow-scheduler is a program which takes in three separate input channels
+and schedules each channel on a leg of a piglow (right now I'm coupling it with
+my fluxstandardin and fluxstandardout programs to transfer the piglow µops over
+the network to colorsmithwide).
+
+This tool only converts streams of data into 19 byte wide µops. Each leg µop is
+7 bytes wide and consists of 6 bytes led and 1 byte delay. The delay byte is
+translated into n copies of the µop minus the delay byte which is fed in
+sequence into multiple piglow µops. For instance,
+
+If we have the µop with contents: 
+	50 50 50 50 50 50 3 
+
+Then for the next four time instances the µop from this channel will be
+
+50 50 50 50 50 50
+
+It is four instead of three since it is necessary to actually set the leds for
+one cycle and then keep them on for the next three which translates to four. 
+
+
+After those four time instances have passed then the next 7 bytes are read in
+and the process happens again until we run out of bytes on that channel.
+
+If that happens then the last values seen are used until all channels are
+exhausted.
