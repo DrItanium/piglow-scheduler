@@ -12,6 +12,7 @@ import (
 var channel0 = flag.String("chan0", "", "path to channel 0 (required)")
 var channel1 = flag.String("chan1", "", "path to channel 1 (required)")
 var channel2 = flag.String("chan2", "", "path to channel 2 (required)")
+var delay = flag.Uint("delay", 5, "delay to add to each µop before sending!")
 
 const (
 	LegDelay = 6
@@ -64,7 +65,11 @@ func (this *Processor) Close() error {
 func (this *Processor) ProcessData() {
 	buf := make([]byte, 7)
 	var err error
-	for _, err = this.reader.Read(buf); err == nil; _, err = this.reader.Read(buf) {
+	var count int
+	for count, err = this.reader.Read(buf); err == nil; count, err = this.reader.Read(buf) {
+		for i := count; i < len(buf); i++ {
+			buf[i] = 0
+		}
 		c := make([]byte, len(buf))
 		copy(c, buf)
 		count := c[6] // needs to have at least one iteration
@@ -151,7 +156,8 @@ func main() {
 		return
 	}
 	defer procs.Close()
-	op := make([]byte, 6*len(procs))
+	op := make([]byte, 6*len(procs)+1)
+	op[len(op)-1] = byte(*delay)
 	out := make(chan [][]byte)
 	// at this point we have some processors waiting on us to do something
 	go func(procs Processors) {
@@ -182,6 +188,7 @@ func main() {
 				// capture a slice and setup the op
 				copy(op[from:to], a)
 			}
+			op[len(op)-1] = byte(*delay)
 			opBuf := bytes.NewBuffer(op)
 			if _, err := opBuf.WriteTo(os.Stdout); err != nil {
 				panic(err)
