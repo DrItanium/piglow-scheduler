@@ -12,20 +12,13 @@ var channel0 = flag.String("chan0", "", "path to channel 0 (required)")
 var channel1 = flag.String("chan1", "", "path to channel 1 (required)")
 var channel2 = flag.String("chan2", "", "path to channel 2 (required)")
 
-type µop [7]byte
+const (
+	LegDelay = 6
+	µopDelay = 18
+)
 
-func (this µop) Delay() byte {
-	return this[6]
-}
-
-type piglow_µop [19]byte
-
-func (this piglow_µop) Delay() byte {
-	return this[18]
-}
-func (this piglow_µop) SetLeg(index int, leg µop) error {
+func SetLeg(index int, in, leg []byte) error {
 	var begin, end int
-	var slice []byte
 	switch index {
 	case 0:
 		begin = 0
@@ -39,9 +32,8 @@ func (this piglow_µop) SetLeg(index int, leg µop) error {
 	default:
 		return fmt.Errorf("Leg index %d is out of range!", index)
 	}
-	slice = this[begin:end]
-	for index, _ := range slice {
-		slice[index] = leg[index]
+	for i, j := begin, 0; i < end; i, j = i+1, j+1 {
+		in[i] = leg[j]
 	}
 	return nil
 }
@@ -56,6 +48,94 @@ func checkArgs() error {
 		return nil
 	}
 }
+
+type Processor struct {
+	path   string
+	file   *os.File
+	reader *bufio.Reader
+	done   bool
+	data   chan []byte
+}
+
+func (this *Processor) Close() error {
+	return this.file.Close()
+}
+func (this *Processor) ProcessData() {
+	buf := make([]byte, 7)
+	var err error
+	for _, err = this.reader.Read(buf); err == nil; _, err = this.reader.Read(buf) {
+		c := make([]byte, len(buf))
+		copy(c, buf)
+		count := c[6] // needs to have at least one iteration
+		c[6] = 0
+		// need to have at least one iteration
+		for i := 0; i < int(count+1); i++ {
+			this.data <- c
+		}
+		// zero out the data now that we have made a copy
+		for i := 0; i < len(buf); i++ {
+			buf[i] = 0
+		}
+	}
+	if err != io.EOF {
+		panic(err)
+	}
+	close(this.data)
+	this.done = true
+}
+
+func New(path string) (*Processor, error) {
+	var proc Processor
+	if f, err := os.Open(path); err != nil {
+		return nil, err
+	} else {
+		proc.path = path
+		proc.file = f
+		proc.reader = bufio.NewReader(f)
+		proc.done = false
+		proc.data = make(chan []byte)
+		return &proc, nil
+	}
+}
+
+type Processors []*Processor
+
+func BuildProcessors(inputs ...string) (Processors, error) {
+	procs := make(Processors, len(inputs))
+	for index, str := range inputs {
+		if proc, err := New(str); err != nil {
+			for _, proc := range procs {
+				if proc != nil {
+					proc.Close()
+				}
+			}
+			return nil, err
+		} else {
+			go proc.ProcessData()
+			procs[index] = proc
+		}
+	}
+	return procs, nil
+}
+func (this Processors) Close() error {
+	// we need to make sure that all processors are closed even if errors occurred during closing
+	var msg string
+	var errorsFound bool
+	for _, p := range this {
+		if err := p.Close(); err != nil {
+			if !errorsFound {
+				msg += fmt.Sprintf("\t- %s: %s", p.path, err)
+				errorsFound = true
+			} else {
+				msg += fmt.Sprintf("\n\t- %s: %s", p.path, err)
+			}
+		}
+	}
+	if errorsFound {
+		return fmt.Errorf("Errors happened during close:\n %s", msg)
+	}
+	return nil
+}
 func main() {
 	flag.Parse()
 	if e := checkArgs(); e != nil {
@@ -64,92 +144,44 @@ func main() {
 		return
 	}
 	// read in three µop chains at a time
-	var f0, f1, f2 *os.File
-	var err error
-	if f0, err = os.Open(*channel0); err != nil {
+	procs, err := BuildProcessors(*channel0, *channel1, *channel2)
+	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	defer f0.Close()
-	if f1, err = os.Open(*channel1); err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer f1.Close()
-	if f2, err = os.Open(*channel2); err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer f2.Close()
-	// we can now open up our input sources
-	in0, err0 := definput(f0)
-	in1, err1 := definput(f1)
-	in2, err2 := definput(f2)
-	var done [3]bool
-	var contents [3]µop
-	//var op piglow_µop
-	trySet := func(index int, val µop) {
-		if !done[index] {
-			contents[index] = val
+	defer procs.Close()
+	op := make([]byte, 6*len(procs))
+	out := make(chan [][]byte)
+	// at this point we have some processors waiting on us to do something
+	go func(procs Processors) {
+		// process the µops until we run out of elements
+		last := make([][]byte, len(procs))
+		for i := 0; i < len(procs); i++ {
+			last[i] = make([]byte, 7)
 		}
-	}
+		for outcome := true; outcome; {
+			outcome = false
+			for ind, proc := range procs {
+				if !proc.done {
+					outcome = true
+					dat := <-proc.data
+					copy(last[ind], dat)
+				}
+			}
+			out <- last
+		}
+		close(out)
+	}(procs)
 	for {
-		if done[0] && done[1] && done[2] {
+		if val, ok := <-out; !ok {
 			break
-		}
-		select {
-		case d0 := <-err0:
-			if d0 == nil {
-				done[0] = true
-			} else {
-				panic(d0)
+		} else {
+			for ind, a := range val {
+				from, to := ind*6, (ind+1)*6
+				// capture a slice and setup the op
+				copy(op[from:to], a)
 			}
-		case d1 := <-err1:
-			if d1 == nil {
-				done[1] = true
-			} else {
-				panic(d1)
-			}
-		case d2 := <-err2:
-			if d2 == nil {
-				done[2] = true
-			} else {
-				panic(d2)
-			}
-		default:
-			trySet(0, <-in0)
-			trySet(1, <-in1)
-			trySet(2, <-in2)
+			fmt.Print("%v\n", op)
 		}
 	}
-}
-func definput(input io.Reader) (chan µop, chan error) {
-	output := make(chan µop)
-	finished := make(chan error)
-	go func(i io.Reader, o chan µop, d chan error) {
-		q := bufio.NewReader(i)
-		container := make([]byte, 7)
-		var count int
-		var err error
-		for count, err = q.Read(container); err == nil && count == 7; count, err = q.Read(container) {
-			o <- µop{
-				container[0],
-				container[1],
-				container[2],
-				container[3],
-				container[4],
-				container[5],
-				container[6],
-			}
-		}
-		if err != nil && err != io.EOF {
-			d <- err
-		} else if err == nil && count != 7 {
-			d <- fmt.Errorf("Was unable to read %d bytes!", 7)
-		}
-		d <- nil
-		close(o)
-		close(d)
-	}(input, output, finished)
-	return output, finished
 }
