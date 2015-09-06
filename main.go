@@ -15,8 +15,8 @@ var channel2 = flag.String("chan2", "", "path to channel 2 (required)")
 var delay = flag.Uint("delay", 5, "delay to add to each µop before sending!")
 
 const (
-	LegDelay = 6
-	µopDelay = 18
+	LegLength = 6
+	LegDelay  = 6
 )
 
 func SetLeg(index int, in, leg []byte) error {
@@ -63,19 +63,15 @@ func (this *Processor) Close() error {
 	return this.file.Close()
 }
 func (this *Processor) ProcessData() {
-	buf := make([]byte, 7)
+	buf := make([]byte, LegLength+1)
 	var err error
-	var count int
-	for count, err = this.reader.Read(buf); err == nil; count, err = this.reader.Read(buf) {
-		for i := count; i < len(buf); i++ {
-			buf[i] = 0
-		}
-		c := make([]byte, len(buf))
-		copy(c, buf)
-		count := c[6] // needs to have at least one iteration
-		c[6] = 0
+	//var count int
+	for _, err = this.reader.Read(buf); err == nil; _, err = this.reader.Read(buf) {
+		d := buf[LegDelay]
 		// need to have at least one iteration
-		for i := 0; i < int(count+1); i++ {
+		for i := 0; i < int(d); i++ {
+			c := make([]byte, len(buf)-1)
+			copy(c, buf)
 			this.data <- c
 		}
 		// zero out the data now that we have made a copy
@@ -156,7 +152,7 @@ func main() {
 		return
 	}
 	defer procs.Close()
-	op := make([]byte, 6*len(procs)+1)
+	op := make([]byte, LegLength*len(procs)+1)
 	op[len(op)-1] = byte(*delay)
 	out := make(chan [][]byte)
 	// at this point we have some processors waiting on us to do something
@@ -164,7 +160,7 @@ func main() {
 		// process the µops until we run out of elements
 		last := make([][]byte, len(procs))
 		for i := 0; i < len(procs); i++ {
-			last[i] = make([]byte, 7)
+			last[i] = make([]byte, LegLength)
 		}
 		for outcome := true; outcome; {
 			outcome = false
@@ -184,7 +180,7 @@ func main() {
 			break
 		} else {
 			for ind, a := range val {
-				from, to := ind*6, (ind+1)*6
+				from, to := ind*LegLength, (ind+1)*LegLength
 				// capture a slice and setup the op
 				copy(op[from:to], a)
 			}
@@ -192,6 +188,9 @@ func main() {
 			opBuf := bytes.NewBuffer(op)
 			if _, err := opBuf.WriteTo(os.Stdout); err != nil {
 				panic(err)
+			}
+			for i := 0; i < len(op)-1; i++ {
+				op[i] = 0
 			}
 		}
 	}
