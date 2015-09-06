@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -181,7 +182,10 @@ func main() {
 				// capture a slice and setup the op
 				copy(op[from:to], a)
 			}
-			fmt.Print("%v\n", op)
+			opBuf := bytes.NewBuffer(op)
+			if _, err := opBuf.WriteTo(os.Stdout); err != nil {
+				panic(err)
+			}
 		}
 	}
 }
